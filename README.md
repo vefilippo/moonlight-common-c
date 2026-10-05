@@ -1,3 +1,5 @@
+> **About this fork** — moonlight-common-c with the **client microphone stream** (from [logabell/moonlight-common-c](https://github.com/logabell/moonlight-common-c)) plus **AES-GCM microphone packets**: local encryption flag `SS_ENC_MICROPHONE_GCM` (`0x10`); packet = header | 64-bit LE counter | 16-byte tag | GCM(seq LE16 | timestamp LE32 | Opus); nonce = counter | `0x0000` | `'C'` `'M'`. Used by [vefilippo/moonlight-android](https://github.com/vefilippo/moonlight-android) and [vefilippo/artemis](https://github.com/vefilippo/artemis) with [vefilippo/Apollo](https://github.com/vefilippo/Apollo).
+
 # Moonlight Streaming Core Library
 
 Moonlight-common-c contains the core GameStream client code shared between [Moonlight](https://moonlight-stream.org) clients, including [Moonlight PC](https://github.com/moonlight-stream/moonlight-qt), [Moonlight Android](https://github.com/moonlight-stream/moonlight-android), [Moonlight iOS](https://github.com/moonlight-stream/moonlight-ios), and [Moonlight Chrome](https://github.com/moonlight-stream/moonlight-chrome).
