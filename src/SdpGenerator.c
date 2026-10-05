@@ -310,6 +310,11 @@ static PSDP_OPTION getAttributesList(char*urlSafeAddr) {
             EncryptionFeaturesEnabled |= SS_ENC_MICROPHONE;
         }
 
+        // Prefer authenticated AES-GCM microphone packets whenever the host supports them
+        if ((EncryptionFeaturesEnabled & SS_ENC_MICROPHONE) && (EncryptionFeaturesSupported & SS_ENC_MICROPHONE_GCM)) {
+            EncryptionFeaturesEnabled |= SS_ENC_MICROPHONE_GCM;
+        }
+
         snprintf(payloadStr, sizeof(payloadStr), "%u", EncryptionFeaturesEnabled);
         err |= addAttributeString(&optionHead, "x-ss-general.encryptionEnabled", payloadStr);
 

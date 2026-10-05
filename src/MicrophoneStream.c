@@ -4,12 +4,19 @@
 #define MIC_IV_LEN 16
 #define MIC_HEADER_FLAGS 0x00
 #define MIC_DEFAULT_FRAME_DURATION_SAMPLES 960
+#define MIC_GCM_IV_LEN 12
+#define MIC_GCM_COUNTER_LEN 8
+#define MIC_GCM_INNER_HEADER_LEN 6
+#ifndef AES_GCM_TAG_LENGTH
+#define AES_GCM_TAG_LENGTH 16
+#endif
 
 static SOCKET micSocket = INVALID_SOCKET;
 static PPLT_CRYPTO_CONTEXT micEncryptionCtx = NULL;
 static uint32_t micRiKeyId = 0;
 static uint16_t micSequenceNumber = 0;
 static uint32_t micTimestamp = 0;
+static uint64_t micGcmCounter = 0;
 
 #pragma pack(push, 1)
 typedef struct _MICROPHONE_PACKET_HEADER {
@@ -35,6 +42,7 @@ int initializeMicrophoneStream(void) {
     micRiKeyId = BE32(micRiKeyId);
     micSequenceNumber = 0;
     micTimestamp = 0;
+    micGcmCounter = 0;
 
     micSocket = bindUdpSocket(RemoteAddr.ss_family, &LocalAddr, AddrLen, 0, SOCK_QOS_TYPE_AUDIO);
     if (micSocket == INVALID_SOCKET) {
@@ -60,6 +68,7 @@ void destroyMicrophoneStream(void) {
     micRiKeyId = 0;
     micSequenceNumber = 0;
     micTimestamp = 0;
+    micGcmCounter = 0;
 }
 
 int LiSendMicrophoneOpusData(const unsigned char* opusData, int opusLength) {
@@ -89,7 +98,58 @@ int LiSendMicrophoneOpusDataEx(const unsigned char* opusData, int opusLength, ui
     header.timestamp = LE32(micTimestamp);
     header.ssrc = LE32(MIC_PACKET_MAGIC);
 
-    if ((EncryptionFeaturesEnabled & SS_ENC_MICROPHONE) && micEncryptionCtx != NULL) {
+    if ((EncryptionFeaturesEnabled & SS_ENC_MICROPHONE_GCM) && micEncryptionCtx != NULL) {
+        // Packet: header | counter (LE64) | GCM tag | ciphertext of [seq (LE16) | timestamp (LE32) | Opus].
+        // Nonce: counter (LE64) | 0x0000 | 'C' | 'M' -- the host requires exactly this layout.
+        unsigned char iv[MIC_GCM_IV_LEN] = {0};
+        unsigned char plaintext[MIC_GCM_INNER_HEADER_LEN + MAX_MIC_PACKET_SIZE];
+        unsigned char* counterOut;
+        unsigned char* tagOut;
+        int plaintextLength = MIC_GCM_INNER_HEADER_LEN + opusLength;
+        int encryptedLength;
+        int i;
+
+        packetLength = (int)sizeof(header) + MIC_GCM_COUNTER_LEN + AES_GCM_TAG_LENGTH + plaintextLength;
+        if (packetLength > MAX_MIC_PACKET_SIZE || packetLength > (int)sizeof(packet)) {
+            Limelog("MIC: Encrypted packet too large (%d > %d)\n", packetLength, MAX_MIC_PACKET_SIZE);
+            return -1;
+        }
+
+        for (i = 0; i < MIC_GCM_COUNTER_LEN; i++) {
+            iv[i] = (unsigned char)(micGcmCounter >> (8 * i));
+        }
+        iv[10] = 'C';
+        iv[11] = 'M';
+
+        plaintext[0] = (unsigned char)(micSequenceNumber & 0xFF);
+        plaintext[1] = (unsigned char)(micSequenceNumber >> 8);
+        plaintext[2] = (unsigned char)(micTimestamp & 0xFF);
+        plaintext[3] = (unsigned char)((micTimestamp >> 8) & 0xFF);
+        plaintext[4] = (unsigned char)((micTimestamp >> 16) & 0xFF);
+        plaintext[5] = (unsigned char)((micTimestamp >> 24) & 0xFF);
+        memcpy(plaintext + MIC_GCM_INNER_HEADER_LEN, opusData, opusLength);
+
+        memcpy(packet, &header, sizeof(header));
+        counterOut = packet + sizeof(header);
+        memcpy(counterOut, iv, MIC_GCM_COUNTER_LEN);
+        tagOut = counterOut + MIC_GCM_COUNTER_LEN;
+        encryptedLength = (int)sizeof(packet) - (int)(tagOut + AES_GCM_TAG_LENGTH - packet);
+
+        if (!PltEncryptMessage(micEncryptionCtx, ALGORITHM_AES_GCM, 0,
+                               (unsigned char*)StreamConfig.remoteInputAesKey,
+                               sizeof(StreamConfig.remoteInputAesKey),
+                               iv, sizeof(iv),
+                               tagOut, AES_GCM_TAG_LENGTH,
+                               plaintext, plaintextLength,
+                               tagOut + AES_GCM_TAG_LENGTH, &encryptedLength)) {
+            Limelog("MIC: GCM encryption failed\n");
+            return -1;
+        }
+
+        // Never reuse a nonce under this session key
+        ++micGcmCounter;
+    }
+    else if ((EncryptionFeaturesEnabled & SS_ENC_MICROPHONE) && micEncryptionCtx != NULL) {
         unsigned char iv[MIC_IV_LEN] = {0};
         unsigned char encryptedData[ROUND_TO_PKCS7_PADDED_LEN(MAX_MIC_PACKET_SIZE)];
         int encryptedLength = (int)sizeof(encryptedData);

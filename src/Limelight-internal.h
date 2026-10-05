@@ -51,6 +51,8 @@ extern uint32_t SunshineFeatureFlags;
 #define SS_ENC_VIDEO 0x02
 #define SS_ENC_AUDIO 0x04
 #define SS_ENC_MICROPHONE 0x08
+// Local extension: AES-GCM microphone packets (Apollo local build). Requires SS_ENC_MICROPHONE.
+#define SS_ENC_MICROPHONE_GCM 0x10
 
 extern uint32_t EncryptionFeaturesSupported;
 extern uint32_t EncryptionFeaturesRequested;
