@@ -117,30 +117,6 @@ static void mul(gf *dst1, gf *src1, gf c, int sz) {
         memset(dst1, 0, c);
 }
 
-/* y = a.dot(b) */
-static gf* multiply1(gf *a, int ar, int ac, gf *b, int br, int bc) {
-    gf *new_m, tg;
-    int r, c, i, ptr = 0;
-
-    assert(ac == br);
-    new_m = (gf*) calloc(1, ar*bc);
-    if (NULL != new_m) {
-
-        /* this multiply is slow */
-        for (r = 0; r < ar; r++) {
-            for (c = 0; c < bc; c++) {
-                tg = 0;
-                for (i = 0; i < ac; i++)
-                    tg ^= gf_mul(a[r*ac+i], b[i*bc+c]);
-
-                new_m[ptr++] = tg;
-            }
-        }
-    }
-
-    return new_m;
-}
-
 static void init_mul_table(void) {
     int i, j;
     for (i=0; i< GF_SIZE+1; i++)
@@ -383,8 +359,6 @@ void reed_solomon_init(void) {
 }
 
 reed_solomon* reed_solomon_new(int data_shards, int parity_shards) {
-    gf* vm = NULL;
-    gf* top = NULL;
     int err = 0;
     reed_solomon* rs = NULL;
 
@@ -404,33 +378,18 @@ reed_solomon* reed_solomon_new(int data_shards, int parity_shards) {
             break;
         }
 
-        vm = (gf*)malloc(data_shards * rs->shards);
-
-        if (NULL == vm) {
-            err = 2;
-            break;
-        }
-        
-        int ptr = 0;
-        for (int row = 0; row < rs->shards; row++) {
-            for (int col = 0; col < data_shards; col++)
-                vm[ptr++] = row == col ? 1 : 0;
-        }
-
-        top = sub_matrix(vm, 0, 0, data_shards, data_shards, rs->shards, data_shards);
-        if (NULL == top) {
-            err = 3;
-            break;
-        }
-
-        err = invert_mat(top, data_shards);
-        assert(0 == err);
-
-        rs->m = multiply1(vm, rs->shards, data_shards, top, data_shards, data_shards);
+        // The encoding matrix is [I; Cauchy parity rows]. It used to be built as
+        // vm * inv(top) with vm = [I; 0] and top = I, which is just vm again but cost
+        // shards*data_shards^2 GF multiplies (~124 ms for 210+40 on a Cortex-A55) on every
+        // FEC block recovery. Build the identity rows directly instead.
+        rs->m = (gf*)calloc(1, data_shards * rs->shards);
         if (NULL == rs->m) {
             err = 4;
             break;
         }
+
+        for (int i = 0; i < data_shards; i++)
+            rs->m[i * data_shards + i] = 1;
 
         for (int j = 0; j < parity_shards; j++) {
             for (int i = 0; i < data_shards; i++)
@@ -443,21 +402,11 @@ reed_solomon* reed_solomon_new(int data_shards, int parity_shards) {
             break;
         }
 
-        free(vm);
-        free(top);
-        vm = NULL;
-        top = NULL;
         return rs;
 
     } while(0);
 
     fprintf(stderr, "err=%d\n", err);
-    if (NULL != vm)
-        free(vm);
-
-    if (NULL != top)
-        free(top);
-
     if (NULL != rs) {
         if (NULL != rs->m)
             free(rs->m);
